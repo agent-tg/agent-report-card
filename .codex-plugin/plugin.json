@@ -1,0 +1,35 @@
+{
+  "name": "agent-report-card",
+  "version": "0.1.0",
+  "description": "A letter-grade report card for your Claude Code or Codex setup. Runs locally and sends nothing.",
+  "author": {
+    "name": "Mana Agents LLC",
+    "url": "https://withmana.ai"
+  },
+  "homepage": "https://withmana.ai",
+  "license": "MIT",
+  "keywords": ["claude-code", "codex", "setup", "audit", "claude-md", "agents-md"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Report Card",
+    "shortDescription": "Grade your AI coding setup in two minutes.",
+    "longDescription": "Checks your rules files, context load, memory, safety settings and project setup, then gives you a letter grade and the top three fixes in a local HTML page. Read-only. Nothing leaves your computer.",
+    "developerName": "Mana Agents LLC",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Letter grade for your setup",
+      "Top three fixes in plain words",
+      "Local HTML report",
+      "Share card with grades only"
+    ],
+    "defaultPrompt": [
+      "Give my AI coding setup a report card.",
+      "Grade my AGENTS.md and Codex settings."
+    ],
+    "websiteURL": "https://withmana.ai",
+    "brandColor": "#1C1C1A",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "logoDark": "./assets/icon.svg"
+  }
+}

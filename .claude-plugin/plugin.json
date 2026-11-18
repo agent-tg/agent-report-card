@@ -1,0 +1,13 @@
+{
+  "name": "agent-report-card",
+  "version": "0.1.0",
+  "description": "A letter-grade report card for your Claude Code or Codex setup. Runs locally and sends nothing.",
+  "author": {
+    "name": "Mana Agents LLC",
+    "url": "https://withmana.ai"
+  },
+  "homepage": "https://withmana.ai",
+  "license": "MIT",
+  "keywords": ["claude-code", "codex", "setup", "audit", "claude-md", "agents-md"],
+  "skills": "./skills/"
+}
