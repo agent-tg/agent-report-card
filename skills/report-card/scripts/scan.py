@@ -27,7 +27,7 @@ try:  # Python 3.11+
 except Exception:  # pragma: no cover - older Python
     tomllib = None
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 SKILL_DIR = Path(__file__).resolve().parent.parent
 MAX_READ = 2_000_000  # bytes; larger files are only measured, not read in full
 

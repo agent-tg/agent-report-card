@@ -1,6 +1,6 @@
 {
   "name": "agent-report-card",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A letter-grade report card for your Claude Code or Codex setup. Runs locally and sends nothing.",
   "author": {
     "name": "Mana Agents LLC",
