@@ -1,5 +1,7 @@
 # Agent Report Card
 
+By Taylor at [Mana](https://withmana.ai).
+
 A free report card for your AI coding setup. It checks how you have set up Claude Code or Codex and gives you a letter grade, a grade for each area, and the three fixes that will help most. The report is a single web page saved on your computer.
 
 Most people never open their `CLAUDE.md` or `AGENTS.md`. Those files, plus your skills, tools and permission settings, decide how well your AI works. This plugin shows you where yours stand in about two minutes.
@@ -21,7 +23,7 @@ See [RUBRIC.md](RUBRIC.md) for exactly how points are given.
 ### Claude Code
 
 ```bash
-claude plugin marketplace add <this repository URL or local folder>
+claude plugin marketplace add agent-tg/agent-report-card
 claude plugin install agent-report-card@agent-report-card
 ```
 
@@ -38,7 +40,7 @@ or just ask: "Give my setup a report card."
 ### Codex
 
 ```bash
-codex plugin marketplace add <this repository URL or local folder>
+codex plugin marketplace add agent-tg/agent-report-card
 codex plugin add agent-report-card@agent-report-card
 ```
 
