@@ -9,10 +9,10 @@ Most people never open their `CLAUDE.md` or `AGENTS.md`. Those files, plus your 
 | Area | What it looks at |
 | --- | --- |
 | Rules files | Do your global and project `CLAUDE.md` / `AGENTS.md` exist? Are they too empty or too long? Repeated lines, old dates, vague wording, rules that contradict each other. |
-| Context load | How many skills, plugins and MCP servers are turned on, duplicate skills, and roughly how much text loads before you type. |
+| Context load | Mostly how much text loads before you type (rules, skill summaries, tool servers), using your own skill-text limits when it can read them. Very large skill counts and duplicates cost a little. |
 | Memory | Whether your AI keeps notes between sessions, globally and for this project. |
-| Safety | Permission settings, risky "allow" rules, and passwords or keys sitting in plain text. Secrets are counted, never shown. |
-| Project setup | README, docs, git, tests and automatic checks in the current project. |
+| Safety | Permission settings, risky "allow" rules, and passwords or keys sitting in plain text. Secrets are counted, never shown. Safety hooks that check shell commands lower the penalty for wide permissions. |
+| Project setup | README, docs, git, tests and automatic checks in the current project. Not graded if the folder is not a project (no code and no git). |
 
 See [RUBRIC.md](RUBRIC.md) for exactly how points are given.
 
@@ -20,10 +20,12 @@ See [RUBRIC.md](RUBRIC.md) for exactly how points are given.
 
 ### Claude Code
 
-```text
-/plugin marketplace add <this repository URL or local folder>
-/plugin install agent-report-card@agent-report-card
+```bash
+claude plugin marketplace add <this repository URL or local folder>
+claude plugin install agent-report-card@agent-report-card
 ```
+
+(or the same two steps inside Claude Code: `/plugin marketplace add ...` and `/plugin install ...`)
 
 Then, inside any project, run:
 
@@ -37,9 +39,10 @@ or just ask: "Give my setup a report card."
 
 ```bash
 codex plugin marketplace add <this repository URL or local folder>
+codex plugin add agent-report-card@agent-report-card
 ```
 
-Install **Agent Report Card** from the plugin list, then ask Codex: "Give my AI coding setup a report card." (or use `$report-card`).
+Then ask Codex: "Give my AI coding setup a report card." (or use `$report-card`).
 
 ### No plugin system? Run it directly
 
@@ -51,7 +54,7 @@ python3 skills/report-card/scripts/scan.py
 
 You can also copy the `skills/report-card` folder into `~/.claude/skills/` or `~/.codex/skills/`. It works on its own.
 
-Options: `--project DIR` and `--home DIR` pick what to check, `--out DIR` picks where the report goes, `--json` prints the raw facts.
+Options: `--project DIR` and `--home DIR` pick what to check, `--out DIR` (or `ARC_OUT`) picks where the report goes, `--json` prints the raw facts.
 
 ## What it reads
 
@@ -63,7 +66,7 @@ Read-only. It never changes your files.
 - `~/.agents/skills/`
 - Your project: `CLAUDE.md`, `AGENTS.md`, `.claude/`, `.mcp.json`, README, docs, tests, `.gitignore`, CI folder, and rules files in parent folders
 
-It writes one file: `agent-report-card/report-card.html` in the current folder (or your system temp folder if it cannot write there).
+It writes one file, in a folder in your home, never inside your project: `~/agent-report-card/report-card-<project-folder-name>.html` (or your system temp folder if it cannot write there). It prints the full path and opens nothing by itself.
 
 ## Privacy
 
@@ -80,6 +83,10 @@ The scanner's grades are fixed rules on things it can count, so the same setup g
 ## Want it fixed for you?
 
 The report links to **Setup Day**: we fix your setup for you in a day. For teams, ask about the **Mana AI Bootcamp**. Links are set in `skills/report-card/config.json`.
+
+## Setup Day page
+
+`docs/index.html` is a plain one-page description of Setup Day, ready for GitHub Pages. The booking link is the `BOOK_CALL_URL` value at the top of that file.
 
 ## Tests
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Builds two test setups for the scanner.
 
-  empty/  a home and project with no AI setup at all
+  empty/  a bare code project and a home with no AI setup at all
   messy/  a home and project with a bloated, repetitive rules file, a fake
           token, 60 fake skills and loose permissions
 
@@ -17,13 +17,18 @@ from pathlib import Path
 def build(root: Path) -> None:
     empty = root / "empty"
     (empty / "home").mkdir(parents=True, exist_ok=True)
-    (empty / "project").mkdir(parents=True, exist_ok=True)
+    (empty / "project" / "src").mkdir(parents=True, exist_ok=True)
+    # A bare code project: some code, nothing else.
+    (empty / "project" / "package.json").write_text('{"name": "demo-app", "version": "1.0.0"}\n')
+    (empty / "project" / "src" / "index.js").write_text("console.log('hello');\n")
 
     messy = root / "messy"
     home = messy / "home"
     proj = messy / "project"
     (home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
-    proj.mkdir(parents=True, exist_ok=True)
+    (proj / "src").mkdir(parents=True, exist_ok=True)
+    (proj / "package.json").write_text('{"name": "messy-app", "version": "1.0.0"}\n')
+    (proj / "src" / "index.js").write_text("console.log('hello');\n")
 
     filler = (
         "- Always follow best practices and be careful with the code.\n"

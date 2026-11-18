@@ -43,7 +43,7 @@ class ScannerTests(unittest.TestCase):
         self.assertIn(r["overall"]["letter"], ("D", "F"))
         ids = {f["id"] for f in r["findings"]}
         self.assertIn("secret-in-rules", ids)
-        self.assertIn("skills-claude", ids)
+        self.assertIn("load-claude", ids)
         self.assertIn("dup-lines", ids)
         self.assertIn("bypass", ids)
         self.assertIn("contradictions", ids)
@@ -74,11 +74,54 @@ class ScannerTests(unittest.TestCase):
         r = self.run_scan("messy")
         text = re.sub(r"<[^>]+>", " ", scan.share_card_html(r["share"]))
         allowed = set(" ".join(list(scan.CATEGORY_NAMES.values()) + list(r["share"]["counts"])
-                               + ["My AI setup report card", "Agent Report Card"]).split())
+                               + ["My AI setup report card", "Agent Report Card", "Not graded"]).split())
         for word in text.split():
             if re.fullmatch(r"[A-F]|[0-9,]+", word):
                 continue
             self.assertIn(word, allowed)
+
+    def test_non_project_folder_not_graded(self):
+        base = self.root / "empty"
+        notes = base / "notes-folder"
+        notes.mkdir(exist_ok=True)
+        r = scan.scan(base / "home", notes, TODAY)
+        self.assertFalse(r["categories"]["structure"]["graded"])
+        self.assertEqual(r["share"]["grades"]["Project setup"], "Not graded")
+        r2 = scan.scan(base / "home", base / "home", TODAY)
+        self.assertFalse(r2["categories"]["structure"]["graded"])
+
+    def test_guard_hook_cuts_permission_penalty(self):
+        import json, shutil
+        src = self.root / "messy"
+        dst = self.root / "guarded"
+        if not dst.exists():
+            shutil.copytree(src, dst, symlinks=True)
+        sp = dst / "home" / ".claude" / "settings.json"
+        data = json.loads(sp.read_text())
+        data["hooks"] = {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "guard.sh"}]}]}
+        sp.write_text(json.dumps(data))
+        plain = {f["id"]: f["points"] for f in self.run_scan("messy")["findings"] if f["category"] == "safety"}
+        guarded_r = scan.scan(dst / "home", dst / "project", TODAY)
+        guarded = {f["id"]: f["points"] for f in guarded_r["findings"] if f["category"] == "safety"}
+        self.assertLess(guarded["bypass"], plain["bypass"])
+        self.assertEqual(guarded["secret-in-rules"], plain["secret-in-rules"])
+        self.assertIn("guard-hook", guarded)
+
+    def test_mini_toml_matches_needed_keys(self):
+        text = (
+            'sandbox_mode = "workspace-write"\napproval_policy = "on-request"\n'
+            '[skills]\nmax_context_tokens = 8000\n'
+            'config= [{ path = "/a/SKILL.md", enabled = false }, { name = "x:y", enabled = false }]\n'
+            '[mcp_servers.one]\ncommand = "node"\n[mcp_servers.two]\nenabled = false\n'
+            '[plugins."p@m"]\nenabled = true\n'
+        )
+        d = scan._mini_toml(text)
+        self.assertEqual(d["sandbox_mode"], "workspace-write")
+        self.assertEqual(d["skills"]["max_context_tokens"], 8000)
+        self.assertEqual(d["skills"]["config"][0], {"path": "/a/SKILL.md", "enabled": False})
+        self.assertEqual(sorted(d["mcp_servers"]), ["one", "two"])
+        self.assertFalse(d["mcp_servers"]["two"]["enabled"])
+        self.assertTrue(d["plugins"]["p@m"]["enabled"])
 
     def test_no_network_imports(self):
         src = (ROOT / "skills" / "report-card" / "scripts" / "scan.py").read_text()

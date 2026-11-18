@@ -82,40 +82,64 @@ def load_json(path: Path):
         return None
 
 
+def _toml_scalar(val: str):
+    val = val.strip()
+    if val in ("true", "false"):
+        return val == "true"
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+        return val[1:-1]
+    try:
+        return int(val)
+    except ValueError:
+        return val
+
+
+def _toml_inline_tables(val: str) -> list:
+    out = []
+    for body in re.findall(r"\{([^{}]*)\}", val):
+        item = {}
+        for m in re.finditer(r"""([A-Za-z0-9_\-]+)\s*=\s*("[^"]*"|'[^']*'|[^,]+)""", body):
+            item[m.group(1)] = _toml_scalar(m.group(2))
+        out.append(item)
+    return out
+
+
 def _mini_toml(text: str) -> dict:
-    """Small fallback for Python < 3.11: reads only the keys this scanner needs."""
+    """Small fallback for Python < 3.11. Reads only what this scanner needs:
+    top-level keys, [tables], [[arrays of tables]] and one-line arrays of
+    inline tables (used for disabled skills)."""
     out: dict = {}
-    section: list[str] = []
+    node: dict = out
     for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip() if not raw.strip().startswith("[[") else raw.strip()
-        if not line:
-            continue
-        if line.startswith("[") and not line.startswith("[["):
-            name = line.strip("[] ")
-            section = [p.strip().strip('"') for p in re.findall(r'"[^"]*"|[^.]+', name)]
-            node = out
-            for p in section:
-                node = node.setdefault(p, {})
+        line = raw.strip()
+        if not line or line.startswith("#"):
             continue
         if line.startswith("[["):
-            section = ["__skip__"]
+            parts = [x.strip().strip('"') for x in re.findall(r'"[^"]*"|[^.]+', line.strip("[] "))]
+            parent = out
+            for x in parts[:-1]:
+                parent = parent.setdefault(x, {})
+            lst = parent.setdefault(parts[-1], [])
+            node = {}
+            if isinstance(lst, list):
+                lst.append(node)
             continue
-        m = re.match(r'^([A-Za-z0-9_\-"]+)\s*=\s*(.+)$', line)
-        if not m:
+        if line.startswith("["):
+            parts = [x.strip().strip('"') for x in re.findall(r'"[^"]*"|[^.]+', line.strip("[] "))]
+            node = out
+            for x in parts:
+                node = node.setdefault(x, {})
+            continue
+        m = re.match(r'^("?[A-Za-z0-9_\-]+"?)\s*=\s*(.+)$', line)
+        if not m or not isinstance(node, dict):
             continue
         key, val = m.group(1).strip('"'), m.group(2).strip()
-        if val in ("true", "false"):
-            v = val == "true"
-        elif val.startswith('"') and val.endswith('"'):
-            v = val[1:-1]
+        if val.startswith("[") and "{" in val:
+            node[key] = _toml_inline_tables(val)
+        elif val.startswith("["):
+            node[key] = [_toml_scalar(x) for x in val.strip("[]").split(",") if x.strip()]
         else:
-            v = val
-        node = out
-        for p in section:
-            node = node.setdefault(p, {})
-        if isinstance(node, dict):
-            node[key] = v
-    out.pop("__skip__", None)
+            node[key] = _toml_scalar(val.split(" #", 1)[0])
     return out
 
 
@@ -345,6 +369,7 @@ def find_rules_files(home: Path, project: Path) -> list[dict]:
         hops = 0
         while hops < 6 and realpath(parent) != realpath(home) and parent != parent.parent:
             cands.append(("Parent folder CLAUDE.md", "claude", parent / "CLAUDE.md"))
+            cands.append(("Parent folder .claude/CLAUDE.md", "claude", parent / ".claude" / "CLAUDE.md"))
             cands.append(("Parent folder AGENTS.md", "codex", parent / "AGENTS.md"))
             parent = parent.parent
             hops += 1
@@ -631,12 +656,27 @@ def collect_codex(home: Path, project: Path) -> dict:
                 continue
             mcp.append(k)
 
+    budget = None
+    if isinstance(sk_cfg, dict) and isinstance(sk_cfg.get("max_context_tokens"), int):
+        budget = sk_cfg["max_context_tokens"]
+    guard_rules = 0
+    rdir = xdir / "rules"
+    if is_dir(rdir):
+        try:
+            for k in sorted(os.listdir(rdir)):
+                if k.endswith(".rules"):
+                    guard_rules += len(re.findall(r'decision\s*=\s*"(forbidden|prompt)"', read_text(rdir / k)))
+        except OSError:
+            pass
+
     mem_dir = xdir / "memories"
     mem_files = count_md(mem_dir)
 
     return {
         "present": present,
         "config_found": bool(cfg),
+        "skill_budget_tokens": budget,
+        "guard_rules": guard_rules,
         "config_text": cfg_text,
         "sandbox_mode": cfg.get("sandbox_mode") if isinstance(cfg, dict) else None,
         "approval_policy": cfg.get("approval_policy") if isinstance(cfg, dict) else None,
@@ -833,13 +873,23 @@ def score_rules(rules: list[dict], hosts: list[str], analyses: dict, f: Findings
     return max(0.0, min(100.0, coverage + max(0.0, quality)))
 
 
+def claude_skill_budget(claude: dict):
+    """Reads Claude Code's skill-listing limits if the user set them."""
+    max_desc = frac = None
+    for _, _, data in claude["settings_files"]:
+        if isinstance(data.get("skillListingMaxDescChars"), (int, float)):
+            max_desc = int(data["skillListingMaxDescChars"])
+        if isinstance(data.get("skillListingBudgetFraction"), (int, float)):
+            frac = float(data["skillListingBudgetFraction"])
+    return max_desc, frac
+
+
+ASSUMED_WINDOW = 200_000  # tokens; used only to turn a budget fraction into tokens
+
+
 def score_context(claude: dict, codex: dict, hosts: list[str], rules_tokens: dict, f: Findings) -> tuple[float, dict]:
-    score = 100.0
     stats = {}
-    worst_skill_pen = 0.0
-    worst_mcp_pen = 0.0
-    dup_pen = 0.0
-    load_pen = 0.0
+    load_pen = count_pen = dup_pen = mcp_pen = 0.0
     for h, data in (("claude", claude), ("codex", codex)):
         if h not in hosts:
             continue
@@ -847,42 +897,55 @@ def score_context(claude: dict, codex: dict, hosts: list[str], rules_tokens: dic
         n_sk = len(data["skills"])
         n_mcp = len(data["mcp"]) + len(data.get("plugin_mcp", []))
         names: dict[str, int] = {}
-        for s in data["skills"]:
-            names[s["name"]] = names.get(s["name"], 0) + 1
+        for sk in data["skills"]:
+            names[sk["name"]] = names.get(sk["name"], 0) + 1
         dups = sorted(n for n, c in names.items() if c > 1)
-        desc_tokens = est_tokens(sum(s["chars"] for s in data["skills"]))
+
+        cap_note = None
+        if h == "claude":
+            max_desc, frac = claude_skill_budget(claude)
+            chars = sum(min(sk["chars"], (max_desc + 30) if max_desc else sk["chars"]) for sk in data["skills"])
+            desc_tokens = est_tokens(chars)
+            if frac:
+                cap = int(frac * ASSUMED_WINDOW)
+                if desc_tokens > cap:
+                    desc_tokens = cap
+                cap_note = f"skill list capped by your setting (about {cap:,} tokens, assuming a 200,000-token window)"
+            elif max_desc:
+                cap_note = f"skill summaries cut to {max_desc} characters by your setting"
+        else:
+            desc_tokens = est_tokens(sum(sk["chars"] for sk in data["skills"]))
+            cap = data.get("skill_budget_tokens")
+            if cap and desc_tokens > cap:
+                desc_tokens = cap
+            if cap:
+                cap_note = f"skill list capped at {cap:,} tokens by your config"
         load = rules_tokens.get(h, 0) + desc_tokens + 500 * n_mcp
         stats[h] = {"skills": n_sk, "mcp": n_mcp, "dup_skills": len(dups), "load_tokens": load,
-                    "plugins": data["plugins"]}
-        if n_sk > 30:
-            p = min(35.0, (n_sk - 30) / 2.0)
-            if p > worst_skill_pen:
-                worst_skill_pen = p
-            f.add("context", f"skills-{h}", p, f"{tool} has {n_sk} skills turned on. The AI reads every skill's summary before each task.",
-                  f"Turn off the {tool} skills and plugins you have not used in the last month. Aim for 30 or fewer.")
-        if n_mcp > 6:
-            p = min(25.0, 4.0 * (n_mcp - 6))
-            worst_mcp_pen = max(worst_mcp_pen, p)
-            f.add("context", f"mcp-{h}", p, f"{tool} has {n_mcp} MCP tool servers connected. Each one adds tool lists the AI must read.",
-                  f"Disconnect {tool} MCP servers you rarely use, or turn them on only in the projects that need them.")
-        if dups:
-            p = min(15.0, 2.0 * len(dups))
-            dup_pen = max(dup_pen, p)
-            f.add("context", f"dup-skills-{h}", p, f"{tool} has {len(dups)} skill name(s) installed more than once.",
-                  "Remove the extra copies so the AI is not choosing between two versions of the same skill.")
-        if load > 40000:
-            lp = 30.0
-        elif load > 20000:
-            lp = 20.0
-        elif load > 10000:
-            lp = 10.0
-        else:
-            lp = 0.0
+                    "plugins": data["plugins"], "skill_tokens": desc_tokens, "cap_note": cap_note}
+
+        # One point per 1,000 tokens over 15,000, up to 55.
+        lp = round(min(55.0, max(0.0, (load - 15000) / 1000.0)), 1)
         if lp:
             load_pen = max(load_pen, lp)
             f.add("context", f"load-{h}", lp, f"{tool} loads roughly {load:,} tokens of rules, skill summaries and tool lists before you type.",
-                  "Cut what loads every time. Less up-front text leaves more room for your actual work.")
-    score -= worst_skill_pen + worst_mcp_pen + dup_pen + load_pen
+                  f"Cut what {tool} loads every time: shorter rules, fewer always-on skills and tool servers. Aim for under 15,000 tokens.")
+        cp = 5.0 if n_sk > 250 else 0.0
+        if cp:
+            count_pen = max(count_pen, cp)
+            f.add("context", f"skills-{h}", cp, f"{tool} has {n_sk} skills turned on. With this many, the AI is more likely to pick the wrong one.",
+                  f"Turn off {tool} skills and plugins you have not used in the last month.")
+        if n_mcp > 12:
+            p = min(10.0, 2.0 * (n_mcp - 12))
+            mcp_pen = max(mcp_pen, p)
+            f.add("context", f"mcp-{h}", p, f"{tool} has {n_mcp} MCP tool servers connected.",
+                  f"Turn on rarely used {tool} MCP servers only in the projects that need them.")
+        if dups:
+            p = min(5.0, 0.5 * len(dups))
+            dup_pen = max(dup_pen, p)
+            f.add("context", f"dup-skills-{h}", p, f"{tool} has {len(dups)} skill name(s) installed more than once.",
+                  "Remove the extra copies so the AI is not choosing between two versions of the same skill.")
+    score = 100.0 - load_pen - count_pen - dup_pen - mcp_pen
     if score >= 90:
         f.add("context", "context-ok", 0, "Startup load is light.", good=True)
     return max(0.0, score), stats
@@ -920,15 +983,31 @@ DANGER_ALLOW = [
 ]
 
 
+def bash_guard_hooks(settings_files) -> int:
+    """Counts PreToolUse hooks that run on shell commands."""
+    n = 0
+    for _, _, data in settings_files:
+        hooks = data.get("hooks")
+        if not isinstance(hooks, dict):
+            continue
+        for entry in hooks.get("PreToolUse") or []:
+            if not isinstance(entry, dict):
+                continue
+            m = str(entry.get("matcher", "") or "")
+            if m in ("", "*", ".*") or re.search(r"\bBash\b", m):
+                n += len(entry.get("hooks") or [1])
+    return n
+
+
+GUARD_FACTOR = 0.4  # permission penalties keep 40% when a guard is in place
+
+
 def score_safety(claude: dict, codex: dict, rules: list[dict], project: dict, hosts: list[str], secrets: dict, f: Findings) -> float:
     score = 100.0
-    # Claude permissions
     allow: list[str] = []
     deny: list[str] = []
     default_mode = None
     skip_prompt = False
-    guard_hook = False
-    env_secret = 0
     for label, _, data in claude["settings_files"]:
         perms = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
         allow += [str(x) for x in perms.get("allow", []) or []]
@@ -937,48 +1016,57 @@ def score_safety(claude: dict, codex: dict, rules: list[dict], project: dict, ho
             default_mode = perms.get("defaultMode")
         if data.get("skipDangerousModePermissionPrompt") or data.get("dangerouslySkipPermissions"):
             skip_prompt = True
-        hooks = data.get("hooks")
-        if isinstance(hooks, dict) and hooks.get("PreToolUse"):
-            guard_hook = True
+    guards = bash_guard_hooks(claude["settings_files"])
+    k = GUARD_FACTOR if guards else 1.0
+    tail = ""
+    claude_pen = 0.0
+
+    def pen(fid, pts, fact, fix):
+        nonlocal claude_pen
+        p = round(pts * k, 1)
+        claude_pen += p
+        f.add("safety", fid, p, fact + tail, fix)
+
     if default_mode == "bypassPermissions":
-        score -= 25
-        f.add("safety", "bypass", 25, "Claude Code is set to skip all permission checks (bypass mode).",
-              "Switch Claude Code's default mode from bypass to normal or accept-edits, and allow only the commands you trust.")
+        pen("bypass", 25, "Claude Code is set to skip all permission checks (bypass mode).",
+            "Switch Claude Code's default mode from bypass to normal or accept-edits, and allow only the commands you trust.")
     if skip_prompt:
-        score -= 5
-        f.add("safety", "skip-prompt", 5, "The warning before entering bypass mode is turned off.",
-              "Turn the bypass-mode warning back on.")
+        pen("skip-prompt", 5, "The warning before entering bypass mode is turned off.", "Turn the bypass-mode warning back on.")
     bare_bash = any(a.strip() in ("Bash", "Bash(*)", "Bash(:*)", "Bash(**)") for a in allow)
     if bare_bash:
-        score -= 15
-        f.add("safety", "bash-all", 15, "Claude Code may run any shell command without asking.",
-              "Replace the blanket shell permission with a short list of safe commands (tests, builds, git status).")
+        pen("bash-all", 15, "Claude Code may run any shell command without asking.",
+            "Replace the blanket shell permission with a short list of safe commands (tests, builds, git status).")
     hits = []
     for a in allow:
         for rx, what in DANGER_ALLOW:
             if rx.search(a) and what not in hits:
                 hits.append(what)
     if hits:
-        p = min(20.0, 10.0 * len(hits))
-        score -= p
-        f.add("safety", "danger-allow", p, "Claude Code is allowed to " + "; ".join(hits) + " without asking.",
-              "Remove allow rules for risky commands. Let the AI ask first for anything that deletes, force-pushes or needs admin rights.")
+        pen("danger-allow", min(20.0, 10.0 * len(hits)), "Claude Code is allowed to " + "; ".join(hits) + " without asking.",
+            "Remove allow rules for risky commands. Let the AI ask first for anything that deletes, force-pushes or needs admin rights.")
     if bare_bash and not deny:
-        score -= 5
-        f.add("safety", "no-deny", 5, "Shell is fully allowed and there are no deny rules as a backstop.",
-              "Add deny rules for the commands that should never run (for example dropping a database).")
+        pen("no-deny", 5, "Shell is fully allowed and there are no deny rules as a backstop.",
+            "Add deny rules for the commands that should never run (for example dropping a database).")
+    score -= claude_pen
+    if guards and claude_pen:
+        f.add("safety", "guard-hook", 0, f"Claude Code has {guards} safety hook(s) that check shell commands before they run. "
+              "That cuts the risk of the wide permissions above, so they count for less than half.", good=True)
+    elif guards:
+        f.add("safety", "guard-hook", 0, "Claude Code has a safety hook that checks shell commands before they run.", good=True)
 
     # Codex sandbox
     if "codex" in hosts:
         sm, ap = codex.get("sandbox_mode"), codex.get("approval_policy")
+        ck = GUARD_FACTOR if codex.get("guard_rules") else 1.0
+        ctail = " Codex rules block or ask about some commands, so this counts for less." if ck < 1 else ""
         if sm == "danger-full-access":
-            score -= 20
-            f.add("safety", "codex-sandbox", 20, "Codex runs with the sandbox off (full access to your computer).",
+            score -= 20 * ck
+            f.add("safety", "codex-sandbox", round(20 * ck, 1), "Codex runs with the sandbox off (full access to your computer)." + ctail,
                   "Set Codex sandbox_mode to workspace-write so it can only change files in your project.")
             if ap == "never":
-                score -= 10
-                f.add("safety", "codex-never-ask", 10, "Codex never asks before acting, and the sandbox is off.",
-                      "Set Codex approval_policy to on-request so it asks before risky steps.")
+                score -= 10 * ck
+                f.add("safety", "codex-never-ask", round(10 * ck, 1), "Codex never asks before acting, and the sandbox is off." + ctail,
+                      "Set Codex approval_policy to on-request so it asks before risky steps, or add Codex rules that block dangerous commands.")
 
     # Secrets
     rules_hits = secrets.get("rules", {})
@@ -997,19 +1085,21 @@ def score_safety(claude: dict, codex: dict, rules: list[dict], project: dict, ho
         score -= 10
         f.add("safety", "env-not-ignored", 10, "This project has a .env file that git is not told to ignore.",
               "Add .env to .gitignore so secrets do not get committed.")
-    if guard_hook and score < 100:
-        score += 5
-        f.add("safety", "guard-hook", 0, "A safety hook checks tool calls before they run.", good=True)
     if score >= 90:
         f.add("safety", "safety-ok", 0, "No risky permission settings or exposed secrets found.", good=True)
     return max(0.0, min(100.0, score))
 
 
-def score_structure(project: dict, has_project_rules: bool, f: Findings) -> float:
+def score_structure(project: dict, has_project_rules: bool, f: Findings):
+    """Returns None (not graded) when the folder is not a project."""
     if project["same_as_home"]:
-        f.add("structure", "no-project", 50, "The report was run from your home folder, not a project.",
-              "Run the report from inside a project folder to grade that project.")
-        return 50.0
+        f.add("structure", "not-graded", 0, "Not graded: the report was run from your home folder, not a project. "
+              "Run it inside a project to grade README, docs, git and tests.", good=True)
+        return None
+    if not project["code_project"] and not project["git"]:
+        f.add("structure", "not-graded", 0, "Not graded: this folder has no code and no git, so it looks like a parent or "
+              "notes folder rather than a project. Run the report inside a code project to grade it.", good=True)
+        return None
     parts = [("readme", 25), ("agent_docs", 20), ("git", 15), ("gitignore", 5)]
     if project["code_project"]:
         parts += [("tests", 25), ("ci", 10)]
@@ -1099,7 +1189,8 @@ def scan(home: Path, project: Path, today: dt.date, adjust: int = 0, notes: list
     has_proj_rules = any(r["scope"] in ("project", "parent") for r in rules)
     scores["structure"] = score_structure(project_info, has_proj_rules, findings)
 
-    weighted = sum(scores[k] * WEIGHTS[k] for k in WEIGHTS) / sum(WEIGHTS.values())
+    graded = [k for k in WEIGHTS if scores[k] is not None]
+    weighted = sum(scores[k] * WEIGHTS[k] for k in graded) / sum(WEIGHTS[k] for k in graded)
     base_letter = letter_for(weighted)
     caps = []
     cap_letter = "A"
@@ -1134,7 +1225,9 @@ def scan(home: Path, project: Path, today: dt.date, adjust: int = 0, notes: list
         "hosts_assumed": hosts_assumed,
         "overall": {"score": round(weighted, 1), "base_letter": base_letter, "letter": letter,
                     "adjust": adjust, "caps": caps},
-        "categories": {k: {"name": CATEGORY_NAMES[k], "score": round(scores[k], 1), "letter": letter_for(scores[k]),
+        "categories": {k: {"name": CATEGORY_NAMES[k], "graded": scores[k] is not None,
+                           "score": None if scores[k] is None else round(scores[k], 1),
+                           "letter": "Not graded" if scores[k] is None else letter_for(scores[k]),
                            "weight": WEIGHTS[k]} for k in WEIGHTS},
         "rules_files": [{"label": r["label"], "also": r["labels"][1:], "path": pretty(r["path"]),
                          "tools": sorted(r["hosts"]),
@@ -1154,7 +1247,7 @@ def scan(home: Path, project: Path, today: dt.date, adjust: int = 0, notes: list
         "notes": clean_notes,
         "share": {
             "overall": letter,
-            "grades": {CATEGORY_NAMES[k]: letter_for(scores[k]) for k in WEIGHTS},
+            "grades": {CATEGORY_NAMES[k]: ("Not graded" if scores[k] is None else letter_for(scores[k])) for k in WEIGHTS},
             "counts": {
                 "Rules files found": len(rules),
                 "Words in rules files": sum(a["words"] for a in analyses.values()),
@@ -1177,7 +1270,7 @@ def load_config() -> dict:
     }
 
 
-GRADE_COLOR = {"A": "#15803d", "B": "#4d7c0f", "C": "#b45309", "D": "#c2410c", "F": "#b91c1c"}
+GRADE_COLOR = {"A": "#15803d", "B": "#4d7c0f", "C": "#b45309", "D": "#c2410c", "F": "#b91c1c", "Not graded": "#66665f"}
 
 
 def share_card_html(share: dict) -> str:
@@ -1204,11 +1297,18 @@ def render_html(r: dict, cfg: dict) -> str:
         bad = [x for x in items if not x["good"]]
         good = [x for x in items if x["good"]]
         lis = "".join(f"<li>{e(x['fact'])}</li>" for x in bad[:6]) + "".join(f"<li class='ok'>{e(x['fact'])}</li>" for x in good[:2])
+        sub = (f"Score {c['score']:.0f} of 100 · counts for {c['weight']}%" if c["graded"]
+               else "Left out of the overall grade")
+        gcls = "grade" if c["graded"] else "grade ng"
+        extra = ""
+        if k == "rules":
+            extra = ("<p class='muted'>This area counts what is in your rules files (size, repeats, old dates, vague words). "
+                     "It cannot judge how well they read. That is what the AI step below is for.</p>")
         cat_cards.append(
             f"<div class='card'><div class='card-top'><div><div class='cat'>{e(c['name'])}</div>"
-            f"<div class='muted'>Score {c['score']:.0f} of 100 · counts for {c['weight']}%</div></div>"
-            f"<div class='grade' style='color:{GRADE_COLOR[c['letter']]}'>{e(c['letter'])}</div></div>"
-            f"<ul>{lis or '<li class=ok>Nothing to flag.</li>'}</ul></div>")
+            f"<div class='muted'>{e(sub)}</div></div>"
+            f"<div class='{gcls}' style='color:{GRADE_COLOR[c['letter']]}'>{e(c['letter'])}</div></div>"
+            f"<ul>{lis or '<li class=ok>Nothing to flag.</li>'}</ul>{extra}</div>")
 
     fixes = "".join(
         f"<li><b>{e(x['fix'])}</b><div class='muted'>Why: {e(x['why'])}</div></li>" for x in r["top_fixes"]
@@ -1224,6 +1324,13 @@ def render_html(r: dict, cfg: dict) -> str:
     ctx_rows = "".join(
         f"<tr><td>{'Claude Code' if h == 'claude' else 'Codex'}</td><td>{s['skills']}</td><td>{s['plugins']}</td>"
         f"<td>{s['mcp']}</td><td>{s['load_tokens']:,}</td></tr>" for h, s in r["context"].items())
+    cap_notes = "".join(
+        f"<li>{'Claude Code' if h == 'claude' else 'Codex'}: "
+        + e(s["cap_note"] or "no limit on skill text found, so this estimate may run high") + "</li>"
+        for h, s in r["context"].items())
+    if cap_notes:
+        cap_notes = ("<ul class='muted'>" + cap_notes + "<li>Each MCP server is counted as about 500 tokens. "
+                     "This is a rough guess.</li></ul>")
 
     notes = ""
     if r["notes"]:
@@ -1242,7 +1349,7 @@ def render_html(r: dict, cfg: dict) -> str:
 :root {{ color-scheme: light; }}
 * {{ box-sizing: border-box; }}
 body {{ margin: 0; background: #f6f6f4; color: #1c1c1a; font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
-header > div {{ min-width: 0; flex: 1 1 220px; }}
+header > div:not(.big) {{ min-width: 0; flex: 1 1 220px; }}
 li, p, td {{ overflow-wrap: anywhere; }}
 main {{ max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }}
 header {{ display: flex; gap: 20px; align-items: center; flex-wrap: wrap; background: #fff; border: 1px solid #e4e4e0; border-radius: 14px; padding: 20px; }}
@@ -1255,6 +1362,7 @@ h2 {{ font-size: 19px; margin: 32px 0 10px; }}
 .card {{ background: #fff; border: 1px solid #e4e4e0; border-radius: 12px; padding: 14px 16px; }}
 .card-top {{ display: flex; justify-content: space-between; align-items: start; gap: 8px; }}
 .cat {{ font-weight: 700; }}
+.grade.ng {{ font-size: 15px; font-weight: 700; white-space: nowrap; }}
 .grade {{ font-size: 40px; font-weight: 800; line-height: 1; }}
 .card ul {{ margin: 10px 0 0; padding-left: 18px; font-size: 14px; }}
 .card li {{ margin-bottom: 4px; }}
@@ -1301,6 +1409,7 @@ footer {{ margin-top: 24px; }}
 <div class="scroll"><table><tr><th>Rules file</th><th>Read by</th><th>Words</th><th>Tokens (about)</th><th>Repeated lines</th></tr>{rf_rows}</table></div>
 <details><summary>Show file locations</summary><ul>{rf_paths or '<li>None</li>'}</ul><p class="muted">Project checked: <code>{e(r['project_path'])}</code></p></details>
 <div class="scroll" style="margin-top:12px"><table><tr><th>Tool</th><th>Skills on</th><th>Plugins</th><th>MCP servers</th><th>Loaded before you type (tokens, about)</th></tr>{ctx_rows or '<tr><td colspan=5>No tool settings found.</td></tr>'}</table></div>
+{cap_notes}
 
 <h2>Share your grade</h2>
 <p class="muted">This card shows only grades and counts. No file names, folder names, project names or file contents. Screenshot it if you want to share.</p>
@@ -1313,6 +1422,7 @@ footer {{ margin-top: 24px; }}
 
 <footer class="muted">
   <p>How grades work: five areas are scored from 0 to 100 and weighted (rules files 30%, safety 25%, context load 20%, project setup 15%, memory 10%).
+  An area marked "not graded" is left out and the rest are re-weighted.
   A is 90 or more, B 80, C 70, D 60, below that F. The same setup always gets the same scores. Your AI's read of your rules can move the overall grade by one letter at most.</p>
   <p>Agent Report Card {e(r['version'])}. Secrets are counted, never shown.</p>
 </footer>
@@ -1324,7 +1434,7 @@ def terminal_summary(r: dict, out_file: Path | None) -> str:
     o = r["overall"]
     lines = [f"Agent Report Card: overall {o['letter']} ({o['score']:.0f}/100)"]
     for c in r["categories"].values():
-        lines.append(f"  {c['name']:<14} {c['letter']}  ({c['score']:.0f})")
+        lines.append(f"  {c['name']:<14} {c['letter']}" + (f"  ({c['score']:.0f})" if c["graded"] else ""))
     for c in o["caps"]:
         lines.append(f"  Note: {c}")
     if r["top_fixes"]:
@@ -1338,22 +1448,30 @@ def terminal_summary(r: dict, out_file: Path | None) -> str:
 
 
 def default_out_dir() -> Path:
-    cwd = Path.cwd() / "agent-report-card"
+    """A folder in the user's own home, never inside the project being checked."""
+    d = Path.home() / "agent-report-card"
     try:
-        cwd.mkdir(exist_ok=True)
-        probe = cwd / ".write-test"
+        d.mkdir(exist_ok=True)
+        probe = d / ".write-test"
         probe.write_text("")
         probe.unlink()
-        return cwd
+        return d
     except OSError:
         return Path(tempfile.gettempdir()) / "agent-report-card"
+
+
+def report_name(project: Path, explicit_out: bool) -> str:
+    if explicit_out:
+        return "report-card.html"
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", project.name).strip("-").lower() or "home"
+    return f"report-card-{slug}.html"
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Grade your Claude Code / Codex setup. Runs locally, sends nothing.")
     ap.add_argument("--home", default=os.environ.get("ARC_HOME") or str(Path.home()), help="Home folder to check (default: yours)")
     ap.add_argument("--project", default=os.environ.get("ARC_PROJECT") or os.getcwd(), help="Project folder to check (default: current folder)")
-    ap.add_argument("--out", default=os.environ.get("ARC_OUT"), help="Folder for the report (default: ./agent-report-card)")
+    ap.add_argument("--out", default=os.environ.get("ARC_OUT"), help="Folder for the report (default: ~/agent-report-card)")
     ap.add_argument("--today", help="Date to grade against, YYYY-MM-DD (default: today)")
     ap.add_argument("--adjust", type=int, default=0, choices=[-1, 0, 1], help="Qualitative adjustment from reading the rules: -1, 0 or 1 letter")
     ap.add_argument("--note", action="append", default=[], help="Short qualitative note (up to 3)")
@@ -1370,7 +1488,7 @@ def main(argv=None) -> int:
     if not args.no_html:
         out_dir = Path(os.path.expanduser(args.out)) if args.out else default_out_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_file = (out_dir / "report-card.html").absolute()
+        out_file = (out_dir / report_name(project, bool(args.out))).absolute()
         out_file.write_text(render_html(result, load_config()), encoding="utf-8")
 
     if args.json:

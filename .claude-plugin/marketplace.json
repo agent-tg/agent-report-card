@@ -3,6 +3,9 @@
   "owner": {
     "name": "Mana Agents LLC"
   },
+  "metadata": {
+    "description": "Agent Report Card: a free, local letter-grade check of your Claude Code or Codex setup."
+  },
   "plugins": [
     {
       "name": "agent-report-card",

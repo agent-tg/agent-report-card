@@ -12,6 +12,8 @@ Each area gets a score from 0 to 100. The overall score is a weighted average.
 
 Letters: A is 90 or more, B is 80 to 89, C is 70 to 79, D is 60 to 69, F is below 60.
 
+An area marked **not graded** is left out, and the other weights are scaled up to fill the gap.
+
 "Tools in use" means Claude Code if `~/.claude` exists and Codex if `~/.codex` exists. If neither exists, both are assumed.
 
 ## Rules files (0 to 100)
@@ -32,13 +34,17 @@ Letters: A is 90 or more, B is 80 to 89, C is 70 to 79, D is 60 to 69, F is belo
 
 No rules files at all scores 0.
 
+This area counts what is in the files. It cannot judge how well they read; the AI step at the end does that.
+
 ## Context load (starts at 100)
 
-Checked per tool; the worst tool counts.
-- Skills over 30: minus 1 point per 2 extra skills (capped at 35).
-- MCP servers over 6: minus 4 each (capped at 25).
-- Skill names installed more than once: minus 2 each (capped at 15).
-- Text loaded before you type (rules + skill summaries + about 500 tokens per MCP server): minus 10 over 10,000 tokens, 20 over 20,000, 30 over 40,000.
+Mostly about how much text loads before you type. Checked per tool; the worst tool counts for each item.
+- Startup text = rules files + skill summaries + about 500 tokens per MCP server. Minus 1 point per 1,000 tokens over 15,000 (capped at 55).
+- If your settings cap skill text, the cap is used: Claude Code `skillListingMaxDescChars` and `skillListingBudgetFraction` (a 200,000-token window is assumed), Codex `[skills] max_context_tokens`. With no cap found, the estimate may run high and the report says so.
+- More than 250 skills turned on: minus 5.
+- More than 12 MCP servers: minus 2 each over 12 (capped at 10).
+- Skill names installed more than once: minus 0.5 each (capped at 5).
+- Skills switched off in Codex config are not counted (also on Python older than 3.11).
 
 ## Memory
 
@@ -54,15 +60,17 @@ Checked per tool; the worst tool counts.
 - Minus 5: bypass-mode warning turned off.
 - Minus 15: any shell command allowed without asking. Minus 5 more if there are no deny rules.
 - Minus 10 per risky allow rule type (delete files, sudo, download-and-run, force-push, disk or permission changes), capped at 20.
-- Minus 20: Codex sandbox is `danger-full-access`. Minus 10 more if `approval_policy` is `never`.
+- **Guard hooks:** if Claude Code has a PreToolUse hook on shell commands (matcher `Bash`, `*` or empty), the Claude Code items above count 40% of their points.
+- Minus 20: Codex sandbox is `danger-full-access`. Minus 10 more if `approval_policy` is `never`. If `~/.codex/rules` has rules that block or ask (`forbidden` or `prompt`), these count 40%.
 - Minus 40: a secret-looking value in a rules file.
 - Minus 15: secret-looking values in tool settings or MCP config.
 - Minus 10: a project `.env` that git does not ignore.
-- Plus 5 (up to 100): a hook that checks tool calls before they run.
 
 ## Project setup
 
-Points out of the parts that apply: README 25, docs folder 20, git 15, `.gitignore` 5. For code projects also tests 25 and CI 10. Run from your home folder, it scores 50.
+Points out of the parts that apply: README 25, docs folder 20, git 15, `.gitignore` 5. For code projects also tests 25 and CI 10.
+
+**Not graded** when the folder is your home folder, or has no code and no git (a parent or notes folder). The report says why.
 
 ## Hard caps
 

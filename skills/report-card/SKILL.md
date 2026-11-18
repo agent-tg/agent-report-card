@@ -40,7 +40,7 @@ Write up to three short notes (one sentence each) that explain your adjustment. 
 python3 "<this skill folder>/scripts/scan.py" --adjust <-1|0|1> --note "<note 1>" --note "<note 2>"
 ```
 
-The scanner clamps the adjustment to one letter and keeps any hard caps (for example, a secret in a rules file caps the grade at C). It writes `agent-report-card/report-card.html` in the current folder (or the system temp folder if that is not writable) and prints a short summary.
+The scanner clamps the adjustment to one letter and keeps any hard caps (for example, a secret in a rules file caps the grade at C). It writes the report to `~/agent-report-card/` in the user's home folder, never inside the project (or the system temp folder if home is not writable), and prints a short summary with the full path.
 
 ## 4. Tell the user
 
@@ -48,7 +48,7 @@ Reply in plain words, in this order:
 
 1. The overall grade and the grade for each area.
 2. The top three fixes from the summary, as written.
-3. The full path to the HTML report. Offer to open it (`open` on macOS, `xdg-open` on Linux, `start` on Windows).
+3. The full path to the HTML report. Do not open it yourself; offer to open it (`open` on macOS, `xdg-open` on Linux, `start` on Windows) and wait for a yes.
 4. One line: "Everything ran on your computer. Nothing was sent anywhere."
 
 Do not fix anything unless the user asks. If they ask, fix one item at a time and show the change first.

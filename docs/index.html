@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setup Day</title>
+<script>
+  // The booking link. Change this one value when the booking page is ready.
+  const BOOK_CALL_URL = "#";
+</script>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fbfbf9; color: #1c1c1a; font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 40px 20px 64px; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 16px; }
+  h2 { font-size: 19px; margin: 36px 0 8px; }
+  .lead { font-size: 21px; font-weight: 700; line-height: 1.35; margin: 0 0 20px; }
+  p { margin: 0 0 14px; }
+  ol { padding-left: 22px; margin: 0; }
+  ol li, ul li { margin-bottom: 10px; }
+  ul { padding-left: 22px; margin: 0; }
+  a { color: #1c1c1a; }
+  .price { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .muted { color: #5f5f58; }
+  .cta { margin: 40px 0 0; padding: 24px; background: #fff; border: 1px solid #e4e4e0; border-radius: 14px; }
+  .button { display: inline-block; background: #1c1c1a; color: #fff; text-decoration: none; font-weight: 700; padding: 14px 22px; border-radius: 10px; font-size: 17px; }
+  .button:hover, .button:focus-visible { background: #000; }
+  .button:focus-visible { outline: 3px solid #8aa0ff; outline-offset: 2px; }
+  .teams { margin-top: 16px; font-size: 15px; }
+  hr { border: 0; border-top: 1px solid #e4e4e0; margin: 40px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Setup Day</h1>
+
+  <p class="lead">You pay for Claude and use it like a chat box. Give me one day and it does your busywork.</p>
+
+  <p>Everyone has access to the most powerful technology in history. Almost nobody knows how to use it. I run my company on it. It reads my email, checks my calendar, works in my files, remembers how I like things done and asks before it sends or deletes anything.</p>
+
+  <p>Getting there took me a year of trial and error. I can set it up for you in a day.</p>
+
+  <h2>Who it's for</h2>
+  <p>Owners, operators and consultants who already pay for Claude or ChatGPT, work on a Mac, and want it to do work, not only answer questions.</p>
+  <p>It is not for teams. If you need this for a whole company, that is <a href="https://withmana.ai/pricing">Mana AI Bootcamp</a>.</p>
+
+  <h2>What you get</h2>
+  <ol>
+    <li><b>A 30-minute call before the day.</b> We pick the three jobs you most want off your plate.</li>
+    <li><b>Your rules file.</b> One page that tells the AI who you are, how you work and what it must never do.</li>
+    <li><b>Memory that sticks.</b> It keeps what you teach it, so you stop repeating yourself.</li>
+    <li><b>Your tools connected.</b> Email, calendar, files and team chat, using the built-in connections.</li>
+    <li><b>Three skills built for your work.</b> A skill is a saved set of steps for a job you do again and again, like a weekly report or a client follow-up.</li>
+    <li><b>Safety settings.</b> It asks before it sends, spends, deletes or changes access.</li>
+    <li><b>A recorded 60-minute walkthrough</b> on your own machine, plus a one-page cheat sheet.</li>
+  </ol>
+
+  <h2>Also included</h2>
+  <ul>
+    <li>My Claude Code add-ons (brain dump, chat log, and a habit that learns from your corrections).</li>
+    <li>14 days of questions by email or Slack after the day.</li>
+  </ul>
+
+  <h2>Price</h2>
+  <p class="price">$2,000 flat, paid upfront.</p>
+  <p class="muted">Your Claude or ChatGPT plan is separate.</p>
+
+  <h2>If something doesn't work</h2>
+  <p>If anything on the list above does not do what we agreed, I fix it free for 14 days. No refunds.</p>
+
+  <div class="cta">
+    <h2 style="margin-top:0">Next step</h2>
+    <p>Book the 30-minute call. If it's not a fit, I'll say so on the call.</p>
+    <a class="button" id="book-call" href="#">Book the 30-minute call</a>
+    <p class="teams muted">Setting this up for a team? See <a href="https://withmana.ai/pricing">Mana AI Bootcamp</a>.</p>
+  </div>
+</main>
+<script>
+  document.getElementById("book-call").href = BOOK_CALL_URL;
+</script>
+</body>
+</html>
